@@ -44,8 +44,17 @@ contract QKeyRotationV1 is EIP712Ops {
     );
 
     /*//////////////////////////////////////////////////////////////
-                                STORAGE
+                                TYPES
     //////////////////////////////////////////////////////////////*/
+
+    struct PendingOp {
+        OpType opType;
+        bytes32 payloadHash;
+        uint64 executableAt;
+        uint64 expiresAt;
+        uint64 guardianEpoch;
+        bool executed;
+    }
 
     struct WalletState {
         bool initialized;
@@ -68,133 +77,172 @@ contract QKeyRotationV1 is EIP712Ops {
         // recovery anti-abuse
         bool recoveryActive;
         uint64 recoveryCooldownUntil;
+        uint64 guardianEpoch;
+
+        PendingOp pendingOp;
     }
+
+    /*//////////////////////////////////////////////////////////////
+                                STORAGE
+    //////////////////////////////////////////////////////////////*/
 
     mapping(uint256 => WalletState) internal wallets;
 
-    IAuthVerifier public immutable verifier;
+    IAuthVerifier public immutable VERIFIER;
 
     /*//////////////////////////////////////////////////////////////
                               CONSTRUCTOR
     //////////////////////////////////////////////////////////////*/
 
-    constructor(IAuthVerifier _verifier)
+    constructor(IAuthVerifier verifier_)
         EIP712Ops("QKeyRotationV1", "1.0.0")
     {
-        verifier = _verifier;
+        VERIFIER = verifier_;
     }
 
     /*//////////////////////////////////////////////////////////////
-                        INTROSPECTION (CORE)
+                        WALLET INITIALIZATION
     //////////////////////////////////////////////////////////////*/
 
-    function canExecute(
+    function initializeWallet(
         uint256 walletId,
-        bytes32 /*opId*/
-    ) external view returns (bool ok, uint256 reasons) {
-        reasons = _computeBlockers(walletId);
-        ok = (reasons == ReasonCodes.OK);
-    }
-
-    function explainBlockers(
-        uint256 walletId,
-        bytes32 /*opId*/
-    ) external view returns (uint256 reasons) {
-        return _computeBlockers(walletId);
-    }
-
-    function canPropose(
-        uint256 walletId,
-        OpType /*opType*/,
-        address /*actor*/
-    ) external view returns (bool ok, uint256 reasons) {
+        KeyRef[] calldata initialKeys,
+        KeyRef[] calldata guardians,
+        Policy calldata policy
+    ) external {
         WalletState storage w = wallets[walletId];
-        if (!w.initialized) {
-            reasons |= ReasonCodes.NOT_INITIALIZED;
-        }
-        if (_isFrozen(w)) {
-            reasons |= ReasonCodes.FROZEN;
-        }
-        ok = (reasons == 0);
-    }
+        require(!w.initialized, "QKEY: already initialized");
 
-    function _computeBlockers(uint256 walletId)
-        internal
-        view
-        returns (uint256 reasons)
-    {
-        WalletState storage w = wallets[walletId];
+        w.keysetHash = KeysetLib.hash(initialKeys);
+        w.guardiansHash = KeysetLib.hash(guardians);
 
-        if (!w.initialized) {
-            reasons |= ReasonCodes.NOT_INITIALIZED;
-        }
-        if (_isFrozen(w)) {
-            reasons |= ReasonCodes.FROZEN;
-        }
-        if (w.recoveryActive) {
-            reasons |= ReasonCodes.RECOVERY_IN_PROGRESS;
-        }
-        if (block.timestamp < w.recoveryCooldownUntil) {
-            reasons |= ReasonCodes.RECOVERY_COOLDOWN;
-        }
-    }
+        w.policy = policy;
+        w.policyHash = PolicyHash.wrap(keccak256(abi.encode(policy)));
 
-    function _isFrozen(WalletState storage w) internal view returns (bool) {
-        return w.frozenUntil != 0 && block.timestamp < w.frozenUntil;
+        w.initialized = true;
+        w.guardianEpoch = 1;
+        w.windowStart = uint64(block.timestamp);
     }
 
     /*//////////////////////////////////////////////////////////////
-                          META / BATCH EXECUTION
+                            ROTATION
     //////////////////////////////////////////////////////////////*/
 
-    function executeBatch(
+    function proposeRotation(
         uint256 walletId,
-        MetaOp[] calldata ops,
-        BatchMode mode
-    ) external returns (uint256[] memory reasonsPerOp) {
-        reasonsPerOp = new uint256[](ops.length);
+        bytes32 newKeysetHash
+    ) external {
+        WalletState storage w = wallets[walletId];
+        require(w.initialized, "QKEY: not initialized");
+        require(!w.recoveryActive, "QKEY: recovery active");
 
-        for (uint256 i = 0; i < ops.length; i++) {
-            uint256 reasons = _executeMetaOp(walletId, ops[i]);
-            reasonsPerOp[i] = reasons;
-
-            emit BatchResult(
-                walletId,
-                i,
-                ops[i].opType,
-                reasons == ReasonCodes.OK,
-                reasons
-            );
-
-            if (mode == BatchMode.ATOMIC && reasons != ReasonCodes.OK) {
-                revert("QKEY: atomic batch failed");
-            }
-        }
+        w.pendingOp = PendingOp({
+            opType: OpType.ROTATE_KEY,
+            payloadHash: newKeysetHash,
+            executableAt: uint64(block.timestamp + w.policy.rotationDelay),
+            expiresAt: uint64(block.timestamp + w.policy.rotationDelay + 1 days),
+            guardianEpoch: w.guardianEpoch,
+            executed: false
+        });
     }
 
-    function _executeMetaOp(
-        uint256 walletId,
-        MetaOp calldata op
-    ) internal returns (uint256 reasons) {
+    function finalizeRotation(uint256 walletId) external {
         WalletState storage w = wallets[walletId];
+        PendingOp storage op = w.pendingOp;
 
-        // global blockers
-        reasons |= _computeBlockers(walletId);
-        if (reasons != 0) return reasons;
+        require(op.opType == OpType.ROTATE_KEY, "QKEY: wrong op");
+        require(!op.executed, "QKEY: executed");
+        require(block.timestamp >= op.executableAt, "QKEY: too early");
+        require(block.timestamp <= op.expiresAt, "QKEY: expired");
 
-        if (op.deadline < block.timestamp) {
-            return ReasonCodes.EXPIRED;
+        if (block.timestamp > w.windowStart + w.policy.windowSeconds) {
+            w.windowStart = uint64(block.timestamp);
+            w.rotationsInWindow = 0;
         }
 
-        if (op.nonce != w.nonce) {
-            return ReasonCodes.NONCE_MISMATCH;
+        require(
+            w.rotationsInWindow < w.policy.maxRotationsPerWindow,
+            "QKEY: rate limited"
+        );
+
+        require(
+            block.timestamp >= w.lastFinalizeAt + w.policy.minFinalizeCooldown,
+            "QKEY: finalize cooldown"
+        );
+
+        w.keysetHash = op.payloadHash;
+        w.rotationsInWindow++;
+        w.lastFinalizeAt = uint64(block.timestamp);
+        op.executed = true;
+
+        emit RotationExecuted(walletId, op.payloadHash, w.policyHash);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                            RECOVERY
+    //////////////////////////////////////////////////////////////*/
+
+    function proposeRecovery(
+        uint256 walletId,
+        bytes32 recoveredKeysetHash
+    ) external {
+        WalletState storage w = wallets[walletId];
+        require(w.initialized, "QKEY: not initialized");
+        require(!w.recoveryActive, "QKEY: recovery active");
+        require(block.timestamp >= w.recoveryCooldownUntil, "QKEY: recovery cooldown");
+
+        w.pendingOp = PendingOp({
+            opType: OpType.RECOVERY,
+            payloadHash: recoveredKeysetHash,
+            executableAt: uint64(block.timestamp + w.policy.recoveryDelay),
+            expiresAt: uint64(block.timestamp + w.policy.recoveryDelay + 1 days),
+            guardianEpoch: w.guardianEpoch,
+            executed: false
+        });
+
+        w.recoveryActive = true;
+    }
+
+    function executeRecovery(uint256 walletId) external {
+        WalletState storage w = wallets[walletId];
+        PendingOp storage op = w.pendingOp;
+
+        require(op.opType == OpType.RECOVERY, "QKEY: wrong op");
+        require(!op.executed, "QKEY: executed");
+        require(block.timestamp >= op.executableAt, "QKEY: too early");
+        require(block.timestamp <= op.expiresAt, "QKEY: expired");
+        require(op.guardianEpoch == w.guardianEpoch, "QKEY: epoch mismatch");
+
+        w.keysetHash = op.payloadHash;
+        w.guardianEpoch++;
+        w.recoveryActive = false;
+        w.recoveryCooldownUntil =
+            uint64(block.timestamp + w.policy.recoveryCooldown);
+
+        op.executed = true;
+
+        emit RecoveryExecuted(walletId, op.payloadHash, w.policyHash);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                            FREEZE
+    //////////////////////////////////////////////////////////////*/
+
+    function freeze(uint256 walletId, uint64 duration) external {
+        WalletState storage w = wallets[walletId];
+        require(duration <= w.policy.freezeMaxDuration, "QKEY: too long");
+
+        uint64 until = uint64(block.timestamp + duration);
+        if (until > w.frozenUntil) {
+            w.frozenUntil = until;
         }
 
-        // NOTE: payload execution deferred to later phases
-        // Here we only consume nonce + signal success
+        emit WalletFrozen(walletId, w.frozenUntil);
+    }
 
-        w.nonce++;
-
-        return ReasonCodes.OK;
+    function unfreeze(uint256 walletId) external {
+        WalletState storage w = wallets[walletId];
+        w.frozenUntil = 0;
+        emit WalletUnfrozen(walletId);
     }
 }
