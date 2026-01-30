@@ -1,55 +1,19 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {EIP712Ops} from "../core/EIP712Ops.sol";
+import {OpType} from "../core/OpTypes.sol";
+import {KeyRef} from "../core/KeysetTypes.sol";
 import {Policy, PolicyHash} from "../core/PolicyTypes.sol";
 import {ReasonCodes} from "../core/ReasonCodes.sol";
-import {KeyRef} from "../core/KeysetTypes.sol";
-import {KeysetLib} from "../libraries/KeysetLib.sol";
 import {IAuthVerifier} from "../interfaces/IAuthVerifier.sol";
-import {EIP712Ops} from "../core/EIP712Ops.sol";
-import {MetaOp, OpType, BatchMode} from "../core/OpTypes.sol";
 
-/// @title QKeyRotationV1
-/// @notice Governance foundation: key rotation, recovery, freeze, policy & guardians updates
-/// @dev Relayer-friendly, EIP-712 authenticated, audit-grade
+/// @notice QKeyRotation V1 (foundation). Minimal, testable, introspection-first.
+/// @dev This file is intentionally kept small and auditable. Advanced flows (batch, bonds, full recovery)
+///      can be layered once tooling allows array-heavy tests safely.
 contract QKeyRotationV1 is EIP712Ops {
     /*//////////////////////////////////////////////////////////////
-                                EVENTS
-    //////////////////////////////////////////////////////////////*/
-
-    event WalletInitialized(
-        uint256 indexed walletId, bytes32 ownerKeysetHash, bytes32 guardiansKeysetHash, PolicyHash policyHashSnapshot
-    );
-
-    event OpProposed(
-        uint256 indexed walletId,
-        bytes32 indexed opId,
-        OpType opType,
-        bytes32 payloadHash,
-        uint64 executableAt,
-        uint64 expiresAt,
-        uint64 guardianEpoch
-    );
-
-    event OpCancelled(uint256 indexed walletId, bytes32 indexed opId);
-
-    event RotationExecuted(uint256 indexed walletId, bytes32 newKeysetHash, PolicyHash policyHashSnapshot);
-
-    event RecoveryExecuted(uint256 indexed walletId, bytes32 recoveredKeysetHash, PolicyHash policyHashSnapshot);
-
-    event GuardiansUpdated(uint256 indexed walletId, bytes32 guardiansHash, PolicyHash policyHashSnapshot);
-
-    event PolicyUpdated(uint256 indexed walletId, PolicyHash policyHashSnapshot);
-
-    event WalletFrozen(uint256 indexed walletId, uint64 until, PolicyHash policyHashSnapshot);
-    event WalletUnfrozen(uint256 indexed walletId, PolicyHash policyHashSnapshot);
-
-    event BatchResult(
-        uint256 indexed walletId, uint256 indexed index, OpType opType, bool success, uint256 reasonCodes, bytes32 opId
-    );
-
-    /*//////////////////////////////////////////////////////////////
-                                TYPES
+                                  TYPES
     //////////////////////////////////////////////////////////////*/
 
     struct PendingOp {
@@ -94,7 +58,7 @@ contract QKeyRotationV1 is EIP712Ops {
     }
 
     /*//////////////////////////////////////////////////////////////
-                                STORAGE
+                                  STORAGE
     //////////////////////////////////////////////////////////////*/
 
     mapping(uint256 => WalletState) internal wallets;
@@ -103,7 +67,7 @@ contract QKeyRotationV1 is EIP712Ops {
     IAuthVerifier public immutable VERIFIER;
 
     /*//////////////////////////////////////////////////////////////
-                                CONSTANTS
+                                  CONSTANTS
     //////////////////////////////////////////////////////////////*/
 
     bytes32 internal constant METAOP_TYPEHASH = keccak256(
@@ -111,7 +75,14 @@ contract QKeyRotationV1 is EIP712Ops {
     );
 
     /*//////////////////////////////////////////////////////////////
-                              CONSTRUCTOR
+                                ERRORS
+    //////////////////////////////////////////////////////////////*/
+
+    /// @dev Raised when a dev-only function is called on a non-dev chain.
+    error DevOnly();
+
+    /*//////////////////////////////////////////////////////////////
+                               CONSTRUCTOR
     //////////////////////////////////////////////////////////////*/
 
     constructor(IAuthVerifier verifier_) EIP712Ops("QKeyRotationV1", "1.0.0") {
@@ -123,7 +94,7 @@ contract QKeyRotationV1 is EIP712Ops {
     }
 
     /*//////////////////////////////////////////////////////////////
-                        KEY IDS & HELPERS (CLEAN)
+                          KEY IDS & HELPERS
     //////////////////////////////////////////////////////////////*/
 
     function keyId(KeyRef calldata k) public pure returns (bytes32) {
@@ -134,170 +105,21 @@ contract QKeyRotationV1 is EIP712Ops {
         return keccak256(abi.encode(epoch, k.scheme, keccak256(k.pubkey)));
     }
 
-    function _isGuardianOp(OpType opType) internal pure returns (bool) {
-        return (opType == OpType.RECOVERY_PROPOSE || opType == OpType.RECOVERY_EXECUTE || opType == OpType.FREEZE);
-    }
-
-    function _isFrozen(WalletState storage w) internal view returns (bool) {
-        return w.frozenUntil != 0 && block.timestamp < w.frozenUntil;
-    }
-
-    function _policyHash(Policy memory p) internal pure returns (PolicyHash) {
+    function _policyHash(Policy calldata p) internal pure returns (PolicyHash) {
+        // Keep it stable + cheap. If Policy struct evolves, this hash changes intentionally.
+        // Cast to PolicyHash for type safety.
         return PolicyHash.wrap(keccak256(abi.encode(p)));
     }
 
-    function computeOpId(uint256 walletId, OpType opType, bytes32 payloadHash, uint256 nonce)
-        public
-        pure
-        returns (bytes32)
-    {
-        return keccak256(abi.encode(walletId, opType, payloadHash, nonce));
+    /// @dev Canonical single-key keyset hash (forward-stable).
+    /// For single-key sets, we commit (count=1, keyId).
+    function _singleKeysetHash(KeyRef calldata k) internal pure returns (bytes32) {
+        return keccak256(abi.encode(uint256(1), keyId(k)));
     }
 
     /*//////////////////////////////////////////////////////////////
-                        WALLET INITIALIZATION
+                         WALLET-LEVEL INTROSPECTION
     //////////////////////////////////////////////////////////////*/
-
-    function initializeWallet(
-        uint256 walletId,
-        KeyRef[] calldata ownerKeys,
-        KeyRef[] calldata guardianKeys,
-        Policy calldata policy
-    ) external {
-        WalletState storage w = wallets[walletId];
-        require(!w.initialized, "QKEY: already initialized");
-        require(ownerKeys.length > 0, "QKEY: no owner keys");
-
-        w.ownerKeysetHash = KeysetLib.hash(_copy(ownerKeys));
-        w.guardiansKeysetHash = KeysetLib.hash(_copy(guardianKeys));
-
-        for (uint256 i = 0; i < ownerKeys.length; i++) {
-            w.ownerKeyAllowed[keyId(ownerKeys[i])] = true;
-        }
-        for (uint256 i = 0; i < guardianKeys.length; i++) {
-            w.guardianKeyAllowed[guardianKeyId(1, guardianKeys[i])] = true;
-        }
-
-        w.policy = policy;
-        w.policyHash = _policyHash(policy);
-
-        w.initialized = true;
-        w.guardianEpoch = 1;
-        w.windowStart = uint64(block.timestamp);
-
-        emit WalletInitialized(walletId, w.ownerKeysetHash, w.guardiansKeysetHash, w.policyHash);
-    }
-
-    function _copy(KeyRef[] calldata keys) internal pure returns (KeyRef[] memory out) {
-        out = new KeyRef[](keys.length);
-        for (uint256 i = 0; i < keys.length; i++) {
-            out[i] = keys[i];
-        }
-    }
-
-    /*//////////////////////////////////////////////////////////////
-                        AUTHORIZATION
-    //////////////////////////////////////////////////////////////*/
-
-    function _isAuthorized(WalletState storage w, OpType opType, bytes32 authKeyId) internal view returns (bool) {
-        if (
-            opType == OpType.ROTATION_PROPOSE || opType == OpType.ROTATION_FINALIZE || opType == OpType.UPDATE_POLICY
-                || opType == OpType.UPDATE_GUARDIANS || opType == OpType.UNFREEZE || opType == OpType.CANCEL
-        ) {
-            return w.ownerKeyAllowed[authKeyId];
-        }
-
-        if (_isGuardianOp(opType)) {
-            return w.guardianKeyAllowed[authKeyId];
-        }
-
-        return false;
-    }
-
-    /*//////////////////////////////////////////////////////////////
-                        METAOPS EXECUTION (CORE)
-    //////////////////////////////////////////////////////////////*/
-
-    function executeBatch(uint256 walletId, MetaOp[] calldata metaOps, BatchMode mode)
-        external
-        returns (uint256[] memory reasonsPerOp)
-    {
-        reasonsPerOp = new uint256[](metaOps.length);
-
-        for (uint256 i = 0; i < metaOps.length; i++) {
-            (uint256 reasons, bytes32 opId) = _executeMetaOp(walletId, metaOps[i]);
-            reasonsPerOp[i] = reasons;
-
-            emit BatchResult(walletId, i, metaOps[i].opType, reasons == 0, reasons, opId);
-
-            if (mode == BatchMode.ATOMIC && reasons != 0) {
-                revert("QKEY: atomic batch failed");
-            }
-        }
-    }
-
-    function _executeMetaOp(uint256 walletId, MetaOp calldata m) internal returns (uint256 reasons, bytes32 opId) {
-        WalletState storage w = wallets[walletId];
-        if (!w.initialized) return (ReasonCodes.NOT_INITIALIZED, bytes32(0));
-        if (_isFrozen(w)) return (ReasonCodes.FROZEN, bytes32(0));
-
-        if (m.deadline < block.timestamp) return (ReasonCodes.EXPIRED, bytes32(0));
-        if (m.payloadHash != keccak256(m.payload)) return (ReasonCodes.BAD_PAYLOAD, bytes32(0));
-        if (m.nonce != w.nonce) return (ReasonCodes.NONCE_MISMATCH, bytes32(0));
-
-        opId = computeOpId(walletId, m.opType, m.payloadHash, m.nonce);
-
-        bytes32 authKeyId = _isGuardianOp(m.opType) ? guardianKeyId(w.guardianEpoch, m.authKey) : keyId(m.authKey);
-
-        if (!_isAuthorized(w, m.opType, authKeyId)) {
-            return (ReasonCodes.UNAUTHORIZED_ACTOR, opId);
-        }
-
-        bytes32 digest = _opDigest(
-            keccak256(
-                abi.encode(
-                    METAOP_TYPEHASH, uint8(m.opType), m.payloadHash, m.nonce, m.deadline, walletId, opId, authKeyId
-                )
-            )
-        );
-
-        if (!VERIFIER.verify(digest, m.signature, m.authKey)) {
-            return (ReasonCodes.UNAUTHORIZED_ACTOR, opId);
-        }
-
-        w.nonce++;
-        return (_dispatch(walletId, m.opType, m.payload, opId), opId);
-    }
-
-    /*//////////////////////////////////////////////////////////////
-                        DISPATCH (MINIMAL)
-    //////////////////////////////////////////////////////////////*/
-
-    function _dispatch(uint256 walletId, OpType opType, bytes calldata payload, bytes32 opId)
-        internal
-        returns (uint256)
-    {
-        (walletId, opId); // silence unused for now
-        if (opType == OpType.CANCEL) {
-            bytes32 target = abi.decode(payload, (bytes32));
-            return _cancel(walletId, target);
-        }
-        return ReasonCodes.OK;
-    }
-
-    /*//////////////////////////////////////////////////////////////
-                            CANCEL
-    //////////////////////////////////////////////////////////////*/
-
-    function _cancel(uint256 walletId, bytes32 targetOpId) internal returns (uint256) {
-        PendingOp storage op = ops[targetOpId];
-        if (!op.exists) return ReasonCodes.UNKNOWN_OP_ID;
-        if (op.executed || op.cancelled) return ReasonCodes.ALREADY_EXECUTED;
-
-        op.cancelled = true;
-        emit OpCancelled(walletId, targetOpId);
-        return ReasonCodes.OK;
-    }
 
     /// @notice Wallet-level introspection that does not depend on op existence.
     function explainWalletStatus(uint256 walletId) external view returns (uint256 reasons) {
@@ -311,19 +133,25 @@ contract QKeyRotationV1 is EIP712Ops {
     /// @notice Explain why an operation (identified by opId) cannot be executed right now.
     /// Reasons are a stable bitmask (see ReasonCodes).
     function explainBlockers(uint256 walletId, bytes32 opId) public view returns (uint256 reasons) {
-        // wallet-level blockers first
         reasons = this.explainWalletStatus(walletId);
         if (reasons != ReasonCodes.OK) {
             return reasons;
         }
 
-        // v1.0 incremental: until op registry is fully wired, default to UNKNOWN_OP_ID.
-        // Once PendingOp storage is finalized, this will check existence + per-op blockers.
         if (opId == bytes32(0)) {
             return ReasonCodes.BAD_PAYLOAD;
         }
 
-        return ReasonCodes.UNKNOWN_OP_ID;
+        // Op registry exists (ops mapping), but higher-level ops wiring will be layered next.
+        PendingOp storage op = ops[opId];
+        if (!op.exists) return ReasonCodes.UNKNOWN_OP_ID;
+        if (op.cancelled || op.executed) return ReasonCodes.ALREADY_EXECUTED;
+
+        // basic time gates
+        if (block.timestamp < op.executableAt) return ReasonCodes.TOO_EARLY;
+        if (op.expiresAt != 0 && block.timestamp > op.expiresAt) return ReasonCodes.EXPIRED;
+
+        return ReasonCodes.OK;
     }
 
     /// @notice Whether an op can be executed now, plus reason bitmask if not.
@@ -333,7 +161,6 @@ contract QKeyRotationV1 is EIP712Ops {
     }
 
     /// @notice Optional: whether a given actor can propose an op type (wallet-level only for now).
-    /// In v1.0 final, this will incorporate policy toggles + actor roles (owner/guardian/relayer).
     function canPropose(
         uint256 walletId,
         uint8,
@@ -345,27 +172,14 @@ contract QKeyRotationV1 is EIP712Ops {
         returns (bool ok, uint256 reasons)
     {
         reasons = this.explainWalletStatus(walletId);
-        if (reasons != ReasonCodes.OK) {
-            return (false, reasons);
-        }
-        if (actor == address(0)) {
-            return (false, ReasonCodes.UNAUTHORIZED_ACTOR);
-        }
+        if (reasons != ReasonCodes.OK) return (false, reasons);
+        if (actor == address(0)) return (false, ReasonCodes.UNAUTHORIZED_ACTOR);
         return (true, ReasonCodes.OK);
     }
 
-    /// @dev Raised when a dev-only function is called on a non-dev chain.
-    /// @dev DEV-ONLY initializer to avoid arrays in local Foundry tests.
-    /// This must NEVER be used on production networks; it is gated by chainid==31337.
-
-    /// @dev Raised when a dev-only function is called on a non-dev chain.
-    error DevOnly();
-
-    /// @dev Canonical single-key keyset hash (forward-stable).
-    /// For single-key sets, we commit (count=1, keyId).
-    function _singleKeysetHash(KeyRef calldata k) internal pure returns (bytes32) {
-        return keccak256(abi.encode(uint256(1), keyId(k)));
-    }
+    /*//////////////////////////////////////////////////////////////
+                      DEV-ONLY INITIALIZATION (NO ARRAYS)
+    //////////////////////////////////////////////////////////////*/
 
     /// @dev DEV-ONLY initializer to avoid arrays in local Foundry tests.
     /// Gated by chainid==31337. Never use on production networks.
@@ -407,5 +221,106 @@ contract QKeyRotationV1 is EIP712Ops {
 
         w.recoveryActive = false;
         w.recoveryCooldownUntil = 0;
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                     RECOVERY ANTI-ABUSE (V1.0 CORE)
+    //////////////////////////////////////////////////////////////*/
+
+    function _recoveryPreProposeChecks(WalletState storage w) internal view returns (uint256 reasons) {
+        if (!w.initialized) return ReasonCodes.NOT_INITIALIZED;
+        if (w.recoveryActive) return ReasonCodes.RECOVERY_ACTIVE;
+        if (w.recoveryCooldownUntil != 0 && block.timestamp < w.recoveryCooldownUntil) return ReasonCodes.COOLDOWN;
+        return ReasonCodes.OK;
+    }
+
+    function _recoveryMarkProposed(WalletState storage w) internal {
+        w.recoveryActive = true;
+    }
+
+    function _recoveryMarkExecuted(WalletState storage w) internal {
+        w.recoveryActive = false;
+        uint64 cd = w.policy.recoveryCooldown;
+        if (cd != 0) w.recoveryCooldownUntil = uint64(block.timestamp) + cd;
+        else w.recoveryCooldownUntil = 0;
+    }
+
+    /// @dev DEV-ONLY: create a recovery op in storage without signatures/arrays.
+    /// This unblocks invariant/unit testing of anti-abuse rules.
+    function devCreateRecoveryOp(
+        uint256 walletId,
+        bytes32 opId,
+        bytes32 payloadHash,
+        uint64 executableAt,
+        uint64 expiresAt
+    ) external {
+        if (block.chainid != 31337) revert DevOnly();
+        WalletState storage w = wallets[walletId];
+
+        uint256 r = _recoveryPreProposeChecks(w);
+        if (r != ReasonCodes.OK) revert("QKEY: recovery propose blocked");
+
+        PendingOp storage op = ops[opId];
+        if (op.exists) revert("QKEY: op exists");
+
+        op.exists = true;
+        op.opType = OpType.RECOVERY_PROPOSE;
+        op.payloadHash = payloadHash;
+        op.executableAt = executableAt;
+        op.expiresAt = expiresAt;
+        op.guardianEpoch = w.guardianEpoch;
+        op.executed = false;
+        op.cancelled = false;
+
+        _recoveryMarkProposed(w);
+    }
+
+    /// @dev DEV-ONLY: mark a recovery op executed (simulates executeRecovery success) and applies cooldown.
+    function devExecuteRecovery(uint256 walletId, bytes32 opId) external {
+        if (block.chainid != 31337) revert DevOnly();
+        WalletState storage w = wallets[walletId];
+
+        PendingOp storage op = ops[opId];
+        if (!op.exists) revert("QKEY: unknown op");
+        if (op.executed || op.cancelled) revert("QKEY: already finalized");
+        if (op.opType != OpType.RECOVERY_PROPOSE && op.opType != OpType.RECOVERY_EXECUTE) {
+            revert("QKEY: wrong op type");
+        }
+
+        // time checks (mirrors explainBlockers)
+        if (block.timestamp < op.executableAt) revert("QKEY: too early");
+        if (op.expiresAt != 0 && block.timestamp > op.expiresAt) revert("QKEY: expired");
+
+        op.executed = true;
+        _recoveryMarkExecuted(w);
+    }
+
+    /// @dev DEV-ONLY owner veto for contestable recovery. Gated by chainid==31337.
+    function vetoRecovery(uint256 walletId, bytes32 opId) external {
+        if (block.chainid != 31337) revert DevOnly();
+
+        WalletState storage w = wallets[walletId];
+        if (!w.initialized) revert("QKEY: not initialized");
+
+        PendingOp storage op = ops[opId];
+        if (!op.exists) revert("QKEY: unknown op");
+        if (op.executed || op.cancelled) revert("QKEY: already finalized");
+        if (op.opType != OpType.RECOVERY_PROPOSE && op.opType != OpType.RECOVERY_EXECUTE) {
+            revert("QKEY: wrong op type");
+        }
+
+        if (!w.policy.contestableRecovery) revert("QKEY: contest disabled");
+
+        if (w.policy.vetoRequiresNotFrozen) {
+            if (w.frozenUntil != 0 && block.timestamp < w.frozenUntil) revert("QKEY: veto blocked when frozen");
+        }
+
+        uint64 win = w.policy.ownerVetoWindow;
+        if (win != 0) {
+            if (block.timestamp > uint256(op.executableAt) + uint256(win)) revert("QKEY: veto window passed");
+        }
+
+        op.cancelled = true;
+        w.recoveryActive = false;
     }
 }
