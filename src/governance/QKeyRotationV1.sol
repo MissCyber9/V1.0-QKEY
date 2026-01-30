@@ -353,4 +353,59 @@ contract QKeyRotationV1 is EIP712Ops {
         }
         return (true, ReasonCodes.OK);
     }
+
+    /// @dev Raised when a dev-only function is called on a non-dev chain.
+    /// @dev DEV-ONLY initializer to avoid arrays in local Foundry tests.
+    /// This must NEVER be used on production networks; it is gated by chainid==31337.
+
+    /// @dev Raised when a dev-only function is called on a non-dev chain.
+    error DevOnly();
+
+    /// @dev Canonical single-key keyset hash (forward-stable).
+    /// For single-key sets, we commit (count=1, keyId).
+    function _singleKeysetHash(KeyRef calldata k) internal pure returns (bytes32) {
+        return keccak256(abi.encode(uint256(1), keyId(k)));
+    }
+
+    /// @dev DEV-ONLY initializer to avoid arrays in local Foundry tests.
+    /// Gated by chainid==31337. Never use on production networks.
+    function initializeWalletSingle(
+        uint256 walletId,
+        KeyRef calldata owner,
+        KeyRef calldata guardian,
+        Policy calldata policy
+    ) external {
+        if (block.chainid != 31337) revert DevOnly();
+
+        WalletState storage w = wallets[walletId];
+        if (w.initialized) revert("QKEY: already initialized");
+
+        // keyset hashes (single-key canonical)
+        w.ownerKeysetHash = _singleKeysetHash(owner);
+        w.guardiansKeysetHash = _singleKeysetHash(guardian);
+
+        // policy + snapshot hash
+        w.policy = policy;
+        w.policyHash = _policyHash(policy);
+
+        // allowlists (owner by keyId; guardians by epoch-bound id)
+        bytes32 ownerId = keyId(owner);
+        w.ownerKeyAllowed[ownerId] = true;
+
+        w.guardianEpoch = 0;
+        bytes32 gId = guardianKeyId(0, guardian);
+        w.guardianKeyAllowed[gId] = true;
+
+        // housekeeping / limits
+        w.initialized = true;
+        w.frozenUntil = 0;
+        w.nonce = 0;
+
+        w.windowStart = uint64(block.timestamp);
+        w.rotationsInWindow = 0;
+        w.lastFinalizeAt = 0;
+
+        w.recoveryActive = false;
+        w.recoveryCooldownUntil = 0;
+    }
 }
