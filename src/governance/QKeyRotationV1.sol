@@ -18,10 +18,7 @@ contract QKeyRotationV1 is EIP712Ops {
     //////////////////////////////////////////////////////////////*/
 
     event WalletInitialized(
-        uint256 indexed walletId,
-        bytes32 ownerKeysetHash,
-        bytes32 guardiansKeysetHash,
-        PolicyHash policyHashSnapshot
+        uint256 indexed walletId, bytes32 ownerKeysetHash, bytes32 guardiansKeysetHash, PolicyHash policyHashSnapshot
     );
 
     event OpProposed(
@@ -36,39 +33,19 @@ contract QKeyRotationV1 is EIP712Ops {
 
     event OpCancelled(uint256 indexed walletId, bytes32 indexed opId);
 
-    event RotationExecuted(
-        uint256 indexed walletId,
-        bytes32 newKeysetHash,
-        PolicyHash policyHashSnapshot
-    );
+    event RotationExecuted(uint256 indexed walletId, bytes32 newKeysetHash, PolicyHash policyHashSnapshot);
 
-    event RecoveryExecuted(
-        uint256 indexed walletId,
-        bytes32 recoveredKeysetHash,
-        PolicyHash policyHashSnapshot
-    );
+    event RecoveryExecuted(uint256 indexed walletId, bytes32 recoveredKeysetHash, PolicyHash policyHashSnapshot);
 
-    event GuardiansUpdated(
-        uint256 indexed walletId,
-        bytes32 guardiansHash,
-        PolicyHash policyHashSnapshot
-    );
+    event GuardiansUpdated(uint256 indexed walletId, bytes32 guardiansHash, PolicyHash policyHashSnapshot);
 
-    event PolicyUpdated(
-        uint256 indexed walletId,
-        PolicyHash policyHashSnapshot
-    );
+    event PolicyUpdated(uint256 indexed walletId, PolicyHash policyHashSnapshot);
 
     event WalletFrozen(uint256 indexed walletId, uint64 until, PolicyHash policyHashSnapshot);
     event WalletUnfrozen(uint256 indexed walletId, PolicyHash policyHashSnapshot);
 
     event BatchResult(
-        uint256 indexed walletId,
-        uint256 indexed index,
-        OpType opType,
-        bool success,
-        uint256 reasonCodes,
-        bytes32 opId
+        uint256 indexed walletId, uint256 indexed index, OpType opType, bool success, uint256 reasonCodes, bytes32 opId
     );
 
     /*//////////////////////////////////////////////////////////////
@@ -129,19 +106,20 @@ contract QKeyRotationV1 is EIP712Ops {
                                 CONSTANTS
     //////////////////////////////////////////////////////////////*/
 
-    bytes32 internal constant METAOP_TYPEHASH =
-        keccak256(
-            "MetaOp(uint8 opType,bytes32 payloadHash,uint256 nonce,uint256 deadline,uint256 walletId,bytes32 opId,bytes32 authKeyId)"
-        );
+    bytes32 internal constant METAOP_TYPEHASH = keccak256(
+        "MetaOp(uint8 opType,bytes32 payloadHash,uint256 nonce,uint256 deadline,uint256 walletId,bytes32 opId,bytes32 authKeyId)"
+    );
 
     /*//////////////////////////////////////////////////////////////
                               CONSTRUCTOR
     //////////////////////////////////////////////////////////////*/
 
-    constructor(IAuthVerifier verifier_)
-        EIP712Ops("QKeyRotationV1", "1.0.0")
-    {
+    constructor(IAuthVerifier verifier_) EIP712Ops("QKeyRotationV1", "1.0.0") {
         VERIFIER = verifier_;
+    }
+
+    function domainSeparator() external view returns (bytes32) {
+        return DOMAIN_SEPARATOR;
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -157,11 +135,7 @@ contract QKeyRotationV1 is EIP712Ops {
     }
 
     function _isGuardianOp(OpType opType) internal pure returns (bool) {
-        return (
-            opType == OpType.RECOVERY_PROPOSE ||
-            opType == OpType.RECOVERY_EXECUTE ||
-            opType == OpType.FREEZE
-        );
+        return (opType == OpType.RECOVERY_PROPOSE || opType == OpType.RECOVERY_EXECUTE || opType == OpType.FREEZE);
     }
 
     function _isFrozen(WalletState storage w) internal view returns (bool) {
@@ -172,12 +146,11 @@ contract QKeyRotationV1 is EIP712Ops {
         return PolicyHash.wrap(keccak256(abi.encode(p)));
     }
 
-    function computeOpId(
-        uint256 walletId,
-        OpType opType,
-        bytes32 payloadHash,
-        uint256 nonce
-    ) public pure returns (bytes32) {
+    function computeOpId(uint256 walletId, OpType opType, bytes32 payloadHash, uint256 nonce)
+        public
+        pure
+        returns (bytes32)
+    {
         return keccak256(abi.encode(walletId, opType, payloadHash, nonce));
     }
 
@@ -212,35 +185,24 @@ contract QKeyRotationV1 is EIP712Ops {
         w.guardianEpoch = 1;
         w.windowStart = uint64(block.timestamp);
 
-        emit WalletInitialized(
-            walletId,
-            w.ownerKeysetHash,
-            w.guardiansKeysetHash,
-            w.policyHash
-        );
+        emit WalletInitialized(walletId, w.ownerKeysetHash, w.guardiansKeysetHash, w.policyHash);
     }
 
     function _copy(KeyRef[] calldata keys) internal pure returns (KeyRef[] memory out) {
         out = new KeyRef[](keys.length);
-        for (uint256 i = 0; i < keys.length; i++) out[i] = keys[i];
+        for (uint256 i = 0; i < keys.length; i++) {
+            out[i] = keys[i];
+        }
     }
 
     /*//////////////////////////////////////////////////////////////
                         AUTHORIZATION
     //////////////////////////////////////////////////////////////*/
 
-    function _isAuthorized(
-        WalletState storage w,
-        OpType opType,
-        bytes32 authKeyId
-    ) internal view returns (bool) {
+    function _isAuthorized(WalletState storage w, OpType opType, bytes32 authKeyId) internal view returns (bool) {
         if (
-            opType == OpType.ROTATION_PROPOSE ||
-            opType == OpType.ROTATION_FINALIZE ||
-            opType == OpType.UPDATE_POLICY ||
-            opType == OpType.UPDATE_GUARDIANS ||
-            opType == OpType.UNFREEZE ||
-            opType == OpType.CANCEL
+            opType == OpType.ROTATION_PROPOSE || opType == OpType.ROTATION_FINALIZE || opType == OpType.UPDATE_POLICY
+                || opType == OpType.UPDATE_GUARDIANS || opType == OpType.UNFREEZE || opType == OpType.CANCEL
         ) {
             return w.ownerKeyAllowed[authKeyId];
         }
@@ -256,11 +218,10 @@ contract QKeyRotationV1 is EIP712Ops {
                         METAOPS EXECUTION (CORE)
     //////////////////////////////////////////////////////////////*/
 
-    function executeBatch(
-        uint256 walletId,
-        MetaOp[] calldata metaOps,
-        BatchMode mode
-    ) external returns (uint256[] memory reasonsPerOp) {
+    function executeBatch(uint256 walletId, MetaOp[] calldata metaOps, BatchMode mode)
+        external
+        returns (uint256[] memory reasonsPerOp)
+    {
         reasonsPerOp = new uint256[](metaOps.length);
 
         for (uint256 i = 0; i < metaOps.length; i++) {
@@ -275,10 +236,7 @@ contract QKeyRotationV1 is EIP712Ops {
         }
     }
 
-    function _executeMetaOp(
-        uint256 walletId,
-        MetaOp calldata m
-    ) internal returns (uint256 reasons, bytes32 opId) {
+    function _executeMetaOp(uint256 walletId, MetaOp calldata m) internal returns (uint256 reasons, bytes32 opId) {
         WalletState storage w = wallets[walletId];
         if (!w.initialized) return (ReasonCodes.NOT_INITIALIZED, bytes32(0));
         if (_isFrozen(w)) return (ReasonCodes.FROZEN, bytes32(0));
@@ -289,10 +247,7 @@ contract QKeyRotationV1 is EIP712Ops {
 
         opId = computeOpId(walletId, m.opType, m.payloadHash, m.nonce);
 
-        bytes32 authKeyId =
-            _isGuardianOp(m.opType)
-                ? guardianKeyId(w.guardianEpoch, m.authKey)
-                : keyId(m.authKey);
+        bytes32 authKeyId = _isGuardianOp(m.opType) ? guardianKeyId(w.guardianEpoch, m.authKey) : keyId(m.authKey);
 
         if (!_isAuthorized(w, m.opType, authKeyId)) {
             return (ReasonCodes.UNAUTHORIZED_ACTOR, opId);
@@ -301,14 +256,7 @@ contract QKeyRotationV1 is EIP712Ops {
         bytes32 digest = _opDigest(
             keccak256(
                 abi.encode(
-                    METAOP_TYPEHASH,
-                    uint8(m.opType),
-                    m.payloadHash,
-                    m.nonce,
-                    m.deadline,
-                    walletId,
-                    opId,
-                    authKeyId
+                    METAOP_TYPEHASH, uint8(m.opType), m.payloadHash, m.nonce, m.deadline, walletId, opId, authKeyId
                 )
             )
         );
@@ -325,13 +273,11 @@ contract QKeyRotationV1 is EIP712Ops {
                         DISPATCH (MINIMAL)
     //////////////////////////////////////////////////////////////*/
 
-    function _dispatch(
-        uint256 walletId,
-        OpType opType,
-        bytes calldata payload,
-        bytes32 opId
-    ) internal returns (uint256) {
-        (walletId, opId);// silence unused for now
+    function _dispatch(uint256 walletId, OpType opType, bytes calldata payload, bytes32 opId)
+        internal
+        returns (uint256)
+    {
+        (walletId, opId); // silence unused for now
         if (opType == OpType.CANCEL) {
             bytes32 target = abi.decode(payload, (bytes32));
             return _cancel(walletId, target);
@@ -351,5 +297,60 @@ contract QKeyRotationV1 is EIP712Ops {
         op.cancelled = true;
         emit OpCancelled(walletId, targetOpId);
         return ReasonCodes.OK;
+    }
+
+    /// @notice Wallet-level introspection that does not depend on op existence.
+    function explainWalletStatus(uint256 walletId) external view returns (uint256 reasons) {
+        WalletState storage w = wallets[walletId];
+        if (!w.initialized) reasons |= ReasonCodes.NOT_INITIALIZED;
+        if (w.frozenUntil != 0 && block.timestamp < w.frozenUntil) {
+            reasons |= ReasonCodes.FROZEN;
+        }
+    }
+
+    /// @notice Explain why an operation (identified by opId) cannot be executed right now.
+    /// Reasons are a stable bitmask (see ReasonCodes).
+    function explainBlockers(uint256 walletId, bytes32 opId) public view returns (uint256 reasons) {
+        // wallet-level blockers first
+        reasons = this.explainWalletStatus(walletId);
+        if (reasons != ReasonCodes.OK) {
+            return reasons;
+        }
+
+        // v1.0 incremental: until op registry is fully wired, default to UNKNOWN_OP_ID.
+        // Once PendingOp storage is finalized, this will check existence + per-op blockers.
+        if (opId == bytes32(0)) {
+            return ReasonCodes.BAD_PAYLOAD;
+        }
+
+        return ReasonCodes.UNKNOWN_OP_ID;
+    }
+
+    /// @notice Whether an op can be executed now, plus reason bitmask if not.
+    function canExecute(uint256 walletId, bytes32 opId) external view returns (bool ok, uint256 reasons) {
+        reasons = explainBlockers(walletId, opId);
+        ok = (reasons == ReasonCodes.OK);
+    }
+
+    /// @notice Optional: whether a given actor can propose an op type (wallet-level only for now).
+    /// In v1.0 final, this will incorporate policy toggles + actor roles (owner/guardian/relayer).
+    function canPropose(
+        uint256 walletId,
+        uint8,
+        /*opType*/
+        address actor
+    )
+        external
+        view
+        returns (bool ok, uint256 reasons)
+    {
+        reasons = this.explainWalletStatus(walletId);
+        if (reasons != ReasonCodes.OK) {
+            return (false, reasons);
+        }
+        if (actor == address(0)) {
+            return (false, ReasonCodes.UNAUTHORIZED_ACTOR);
+        }
+        return (true, ReasonCodes.OK);
     }
 }
