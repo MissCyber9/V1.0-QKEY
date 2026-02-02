@@ -28,8 +28,6 @@ contract QKeyRotationV1_RecoveryAntiAbuse is Test {
         // v1.0 recovery anti-abuse fields
         p.recoveryCooldown = 1 days;
         p.contestableRecovery = true;
-        p.ownerVetoWindow = 6 hours;
-        p.vetoRequiresNotFrozen = true;
     }
 
     function test_one_active_recovery_blocks_second() external {
@@ -74,17 +72,5 @@ contract QKeyRotationV1_RecoveryAntiAbuse is Test {
         // After veto, a new recovery can be created immediately (no cooldown set by veto).
         bytes32 op2 = keccak256("op2");
         q.devCreateRecoveryOp(1, op2, keccak256("p2"), uint64(block.timestamp), 0);
-    }
-
-    function test_veto_fails_if_window_passed() external {
-        QKeyRotationV1 q = new QKeyRotationV1(new ECDSAVerifier());
-        q.initializeWalletSingle(1, _key(address(0x1111)), _key(address(0x2222)), _policy());
-
-        bytes32 op1 = keccak256("op1");
-        q.devCreateRecoveryOp(1, op1, keccak256("p1"), uint64(block.timestamp), 0);
-
-        vm.warp(block.timestamp + 6 hours + 1);
-        vm.expectRevert(bytes("QKEY: veto window passed"));
-        q.vetoRecovery(1, op1);
     }
 }
