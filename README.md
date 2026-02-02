@@ -64,3 +64,19 @@ $ forge --help
 $ anvil --help
 $ cast --help
 ```
+
+## Integration (external apps)
+
+### 1) Import
+- As Foundry dependency: `forge install MissCyber9/V1.0-QKEY`
+- Or as git submodule.
+
+### 2) Minimal flow
+- Deploy verifier + QKeyRotationV1
+- Read `domainSeparator()`
+- Initialize wallet: `initializeWalletSingle(walletId, ownerKey, guardianKey, policy)`
+
+### 3) Pre-flight checks (recommended)
+- `explainWalletStatus(walletId)`
+- `canPropose(walletId, opType, actor)`
+- `explainBlockers(walletId, opId)`
