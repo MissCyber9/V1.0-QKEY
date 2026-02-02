@@ -13,7 +13,7 @@ struct Policy {
 
     // Recovery anti-abuse
     uint64 recoveryCooldown;
-    bool   contestableRecovery;
+    bool contestableRecovery;
 }
 
 /// @notice Snapshot hash used for telemetry & audit trails

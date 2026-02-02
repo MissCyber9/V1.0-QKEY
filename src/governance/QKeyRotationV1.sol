@@ -224,25 +224,8 @@ contract QKeyRotationV1 is EIP712Ops {
         }
     }
 
-    function vetoRecovery(uint256 walletId, bytes32 opId) external {
-        if (block.chainid != 31337) revert DevOnly();
-
-        WalletState storage w = wallets[walletId];
-        if (!w.initialized) revert("QKEY: not initialized");
-
-        PendingOp storage op = ops[opId];
-        if (!op.exists) revert("QKEY: unknown op");
-        if (op.executed || op.cancelled) revert("QKEY: already finalized");
-        if (op.opType != OpType.RECOVERY_PROPOSE && op.opType != OpType.RECOVERY_EXECUTE) {
-            revert("QKEY: wrong op type");
-        }
-
-        if (!w.policy.contestableRecovery) revert("QKEY: contest disabled");
-        if (w.frozenUntil != 0 && block.timestamp < w.frozenUntil) revert("QKEY: veto blocked when frozen");
-
-        op.cancelled = true;
-        w.recoveryActive = false;
-    }
-
-    // ===== Public Recovery API (devchain-only wrappers) =====
+    // authKeyId must match the declared guardianKey and current epoch
 }
+
+// ===== Public Recovery API (devchain-only wrappers) =====
+

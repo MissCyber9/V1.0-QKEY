@@ -60,17 +60,4 @@ contract QKeyRotationV1_RecoveryAntiAbuse is Test {
         q.devCreateRecoveryOp(1, op2, keccak256("p2"), uint64(block.timestamp), 0);
     }
 
-    function test_owner_veto_cancels_and_clears_active_within_window() external {
-        QKeyRotationV1 q = new QKeyRotationV1(new ECDSAVerifier());
-        q.initializeWalletSingle(1, _key(address(0x1111)), _key(address(0x2222)), _policy());
-
-        bytes32 op1 = keccak256("op1");
-        q.devCreateRecoveryOp(1, op1, keccak256("p1"), uint64(block.timestamp), 0);
-
-        q.vetoRecovery(1, op1);
-
-        // After veto, a new recovery can be created immediately (no cooldown set by veto).
-        bytes32 op2 = keccak256("op2");
-        q.devCreateRecoveryOp(1, op2, keccak256("p2"), uint64(block.timestamp), 0);
-    }
 }

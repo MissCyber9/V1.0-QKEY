@@ -15,13 +15,7 @@ library KeysetLib {
 
         bytes32 h;
         for (uint256 i = 0; i < keys.length; i++) {
-            h = keccak256(
-                abi.encodePacked(
-                    h,
-                    keys[i].scheme,
-                    keccak256(keys[i].pubkey)
-                )
-            );
+            h = keccak256(abi.encodePacked(h, keys[i].scheme, keccak256(keys[i].pubkey)));
         }
         return h;
     }
