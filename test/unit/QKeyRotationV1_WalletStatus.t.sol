@@ -9,7 +9,7 @@ import {ReasonCodes} from "../../src/core/ReasonCodes.sol";
 
 contract QKeyRotationV1_WalletStatus is Test {
     function test_explainWalletStatus_not_initialized() external {
-        QKeyRotationV1 q = new QKeyRotationV1(new ECDSAVerifier());
+        QKeyRotationV1 q = new QKeyRotationV1(new ECDSAVerifier(), true);
         uint256 reasons = q.explainWalletStatus(1);
 
         assertTrue((reasons & ReasonCodes.NOT_INITIALIZED) != 0);

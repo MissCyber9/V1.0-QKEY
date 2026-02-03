@@ -9,7 +9,7 @@ import {ECDSAVerifier} from "../../src/verifiers/ECDSAVerifier.sol";
 contract QKeyRotationV1_Smoke is Test {
     function test_deploy_and_domain_separator() external {
         ECDSAVerifier v = new ECDSAVerifier();
-        QKeyRotationV1 q = new QKeyRotationV1(v);
+        QKeyRotationV1 q = new QKeyRotationV1(v, true);
 
         assertTrue(address(q) != address(0));
 

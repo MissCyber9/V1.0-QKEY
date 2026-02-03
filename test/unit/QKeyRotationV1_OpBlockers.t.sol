@@ -27,7 +27,7 @@ contract QKeyRotationV1_OpBlockers is Test {
     }
 
     function test_blockers_unknown_op() external {
-        QKeyRotationV1 q = new QKeyRotationV1(new ECDSAVerifier());
+        QKeyRotationV1 q = new QKeyRotationV1(new ECDSAVerifier(), true);
         q.initializeWalletSingle(1, _key(address(0x1111)), _key(address(0x2222)), _policy());
 
         uint256 r = q.explainBlockers(1, keccak256("nope"));
@@ -35,7 +35,7 @@ contract QKeyRotationV1_OpBlockers is Test {
     }
 
     function test_blockers_too_early() external {
-        QKeyRotationV1 q = new QKeyRotationV1(new ECDSAVerifier());
+        QKeyRotationV1 q = new QKeyRotationV1(new ECDSAVerifier(), true);
         q.initializeWalletSingle(1, _key(address(0x1111)), _key(address(0x2222)), _policy());
 
         bytes32 opId = keccak256("op");
@@ -46,7 +46,7 @@ contract QKeyRotationV1_OpBlockers is Test {
     }
 
     function test_blockers_expired() external {
-        QKeyRotationV1 q = new QKeyRotationV1(new ECDSAVerifier());
+        QKeyRotationV1 q = new QKeyRotationV1(new ECDSAVerifier(), true);
         q.initializeWalletSingle(1, _key(address(0x1111)), _key(address(0x2222)), _policy());
 
         bytes32 opId = keccak256("op");

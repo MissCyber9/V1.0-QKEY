@@ -30,7 +30,7 @@ contract QKeyRotationV1_RecoveryAntiAbuse is Test {
     }
 
     function test_one_active_recovery_blocks_second() external {
-        QKeyRotationV1 q = new QKeyRotationV1(new ECDSAVerifier());
+        QKeyRotationV1 q = new QKeyRotationV1(new ECDSAVerifier(), true);
         q.initializeWalletSingle(1, _key(address(0x1111)), _key(address(0x2222)), _policy());
 
         bytes32 op1 = keccak256("op1");
@@ -43,7 +43,7 @@ contract QKeyRotationV1_RecoveryAntiAbuse is Test {
     }
 
     function test_execute_sets_cooldown_blocks_new_recovery_until_passed() external {
-        QKeyRotationV1 q = new QKeyRotationV1(new ECDSAVerifier());
+        QKeyRotationV1 q = new QKeyRotationV1(new ECDSAVerifier(), true);
         q.initializeWalletSingle(1, _key(address(0x1111)), _key(address(0x2222)), _policy());
 
         bytes32 op1 = keccak256("op1");

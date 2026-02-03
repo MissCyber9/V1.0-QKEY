@@ -30,7 +30,7 @@ contract QKeyRotationV1_TypedBlockers is Test {
     }
 
     function test_epoch_mismatch_blocks() external {
-        QKeyRotationV1 q = new QKeyRotationV1(new ECDSAVerifier());
+        QKeyRotationV1 q = new QKeyRotationV1(new ECDSAVerifier(), true);
         q.initializeWalletSingle(1, _key(address(0x1111)), _key(address(0x2222)), _policy());
 
         bytes32 opId = keccak256("op");
@@ -44,7 +44,7 @@ contract QKeyRotationV1_TypedBlockers is Test {
     }
 
     function test_wrong_op_type_blocks() external {
-        QKeyRotationV1 q = new QKeyRotationV1(new ECDSAVerifier());
+        QKeyRotationV1 q = new QKeyRotationV1(new ECDSAVerifier(), true);
         q.initializeWalletSingle(1, _key(address(0x1111)), _key(address(0x2222)), _policy());
 
         bytes32 opId = keccak256("op");

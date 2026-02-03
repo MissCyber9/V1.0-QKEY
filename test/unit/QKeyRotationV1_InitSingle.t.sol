@@ -26,7 +26,7 @@ contract QKeyRotationV1_InitSingle is Test {
     }
 
     function test_initializeWalletSingle_clears_not_initialized_and_allows_canPropose() external {
-        QKeyRotationV1 q = new QKeyRotationV1(new ECDSAVerifier());
+        QKeyRotationV1 q = new QKeyRotationV1(new ECDSAVerifier(), true);
 
         uint256 r0 = q.explainWalletStatus(1);
         assertTrue((r0 & ReasonCodes.NOT_INITIALIZED) != 0);

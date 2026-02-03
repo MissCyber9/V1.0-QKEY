@@ -56,8 +56,16 @@ contract QKeyRotationV1 is EIP712Ops {
         "MetaOp(uint8 opType,bytes32 payloadHash,uint256 nonce,uint256 deadline,uint256 walletId,bytes32 opId,bytes32 authKeyId)"
     );
 
-    constructor(IAuthVerifier verifier_) EIP712Ops("QKeyRotationV1", "1.0.0") {
+    bool public immutable DEV;
+
+    modifier onlyDev() {
+        require(DEV, "QKEY: dev-only");
+        _;
+    }
+
+    constructor(IAuthVerifier verifier_, bool dev_) EIP712Ops("QKeyRotationV1", "1.0.0") {
         VERIFIER = verifier_;
+        DEV = dev_;
     }
 
     function domainSeparator() external view returns (bytes32) {
@@ -187,7 +195,7 @@ contract QKeyRotationV1 is EIP712Ops {
         bytes32 payloadHash,
         uint64 executableAt,
         uint64 expiresAt
-    ) external {
+    ) external onlyDev onlyDev {
         if (block.chainid != 31337) revert DevOnly();
         WalletState storage w = wallets[walletId];
 
@@ -207,7 +215,7 @@ contract QKeyRotationV1 is EIP712Ops {
         _recoveryMarkProposed(w);
     }
 
-    function devExecuteRecovery(uint256 walletId, bytes32 opId) external {
+    function devExecuteRecovery(uint256 walletId, bytes32 opId) external onlyDev onlyDev {
         if (block.chainid != 31337) revert DevOnly();
         WalletState storage w = wallets[walletId];
 
