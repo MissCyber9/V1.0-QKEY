@@ -1,82 +1,72 @@
-## Foundry
+# QKeyRotationV1 – Stable Release (v1.0.0)
 
-**Foundry is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.**
+QKeyRotationV1 is a production-ready key-rotation and recovery engine designed for
+high-security wallets and secure applications (e.g. CarthEdge).
 
-Foundry consists of:
+---
 
-- **Forge**: Ethereum testing framework (like Truffle, Hardhat and DappTools).
-- **Cast**: Swiss army knife for interacting with EVM smart contracts, sending transactions and getting chain data.
-- **Anvil**: Local Ethereum node, akin to Ganache, Hardhat Network.
-- **Chisel**: Fast, utilitarian, and verbose solidity REPL.
+## Status
 
-## Documentation
+- ✅ All unit tests passing
+- ✅ CI green
+- ✅ Recovery anti-abuse (one-active, cooldown, veto window)
+- ✅ Introspection APIs (explainBlockers, explainWalletStatus)
+- ✅ Guardian epoch safety
+- ✅ EIP-712 domain separation
+- ✅ Public, stable API
 
-https://book.getfoundry.sh/
+---
 
-## Usage
+## Core Capabilities
 
-### Build
+- Deterministic key rotation
+- Guardian-based recovery
+- Recovery veto and cooldown
+- Explicit wallet and operation introspection
+- Replay, griefing, and abuse resistance
 
-```shell
-$ forge build
-```
+---
 
-### Test
+## Stable Public API (v1.0.0)
 
-```shell
-$ forge test
-```
+- initializeWalletSingle
+- canPropose
+- canExecute
+- explainBlockers
+- explainWalletStatus
 
-### Format
+⚠️ API is considered stable starting from v1.0.0.
 
-```shell
-$ forge fmt
-```
+---
 
-### Gas Snapshots
+## Threat Model (Covered)
 
-```shell
-$ forge snapshot
-```
+- Guardian key compromise
+- Stale / replayed operations
+- Recovery abuse and griefing
+- Unauthorized execution
+- Epoch desynchronization
 
-### Anvil
+---
 
-```shell
-$ anvil
-```
+## Integration
 
-### Deploy
+QKeyRotationV1 is designed to be embedded by higher-level applications.
+It does not manage UI, transport, or identity by itself.
 
-```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
-```
+Reference integration:
+→ **CarthEdge** (secure Web3 communication platform)
 
-### Cast
+---
 
-```shell
-$ cast <subcommand>
-```
+## Security Notes
 
-### Help
+- Core logic is immutable once deployed
+- Do not fork or modify without understanding invariants
+- All recovery logic is intentionally explicit and introspectable
 
-```shell
-$ forge --help
-$ anvil --help
-$ cast --help
-```
+---
 
-## Integration (external apps)
+## License
 
-### 1) Import
-- As Foundry dependency: `forge install MissCyber9/V1.0-QKEY`
-- Or as git submodule.
-
-### 2) Minimal flow
-- Deploy verifier + QKeyRotationV1
-- Read `domainSeparator()`
-- Initialize wallet: `initializeWalletSingle(walletId, ownerKey, guardianKey, policy)`
-
-### 3) Pre-flight checks (recommended)
-- `explainWalletStatus(walletId)`
-- `canPropose(walletId, opType, actor)`
-- `explainBlockers(walletId, opId)`
+MIT
